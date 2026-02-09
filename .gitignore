@@ -1,0 +1,11 @@
+*
+!PKGBUILD
+!.SRCINFO
+!.gitignore
+!README.md
+!update.sh
+!.github
+!Dockerfile
+!flake.*
+!test-docker-build.sh
+!update-srcinfo.sh
