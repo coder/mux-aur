@@ -1,36 +1,76 @@
 pkgname=mux
 pkgver=0.16.0
-pkgrel=0
+pkgrel=4
 pkgdesc="Desktop app for isolated, parallel agentic development"
 arch=('x86_64')
 url='https://github.com/coder/mux'
 license=('AGPL-3.0-only')
-depends=('fuse2')
-source=("mux-${pkgver}-x86_64.AppImage::${url}/releases/download/v${pkgver}/mux-${pkgver}-x86_64.AppImage")
-sha256sums=('0b3ba305e56ef8cfe8b7be3e28f7b8f81569cfdfd24ddf3d9f5509d0c7dd13f6')
+depends=('electron' 'bash' 'git')
+makedepends=('bun' 'nodejs' 'npm' 'python' 'make')
+source=("mux-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('1414891fbe5432da98300e0ea782d106b6ca9b5e84777e208641ed34641a1476')
+options=('!strip' '!debug')
+
+build() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+
+  export HOME="${srcdir}/home"
+  mkdir -p "${HOME}"
+
+  bun install --frozen-lockfile --no-progress
+
+  if [[ -x ./scripts/postinstall.sh ]]; then
+    ./scripts/postinstall.sh
+  fi
+
+  make SHELL=/bin/bash build
+}
 
 package() {
-  cd "${srcdir}"
+  cd "${srcdir}/${pkgname}-${pkgver}"
 
-  local appimage="mux-${pkgver}-x86_64.AppImage"
+  install -dm755 "${pkgdir}/usr/lib/${pkgname}"
+  cp -a dist "${pkgdir}/usr/lib/${pkgname}/"
+  cp -a node_modules "${pkgdir}/usr/lib/${pkgname}/"
+  install -Dm644 package.json "${pkgdir}/usr/lib/${pkgname}/package.json"
 
-  install -Dm755 "${appimage}" "${pkgdir}/opt/${pkgname}/mux.AppImage"
+  # Remove build byproducts that leak absolute build paths ($srcdir).
+  local nm_dir="${pkgdir}/usr/lib/${pkgname}/node_modules"
+  find "${nm_dir}" -type d -name '__pycache__' -prune -exec rm -rf {} +
+  find "${nm_dir}" -type d -path '*/build/Release/.deps' -prune -exec rm -rf {} +
+  find "${nm_dir}" -type d -path '*/build/Release/obj.target' -prune -exec rm -rf {} +
+  find "${nm_dir}" -type f \( \
+    -name '*.pyc' -o \
+    -name '*.pyo' -o \
+    -name '*.o' -o \
+    -name '*.d' -o \
+    -name '*.mk' -o \
+    -name 'Makefile' -o \
+    -name 'config.gypi' \
+  \) -delete
 
   install -Dm755 /dev/stdin "${pkgdir}/usr/bin/mux" <<'EOF'
 #!/bin/sh
-exec /opt/mux/mux.AppImage "$@"
+export ELECTRON_RUN_AS_NODE=1
+export MUX_E2E_LOAD_DIST=1
+exec electron /usr/lib/mux/dist/cli/index.js "$@"
 EOF
+
+  if [[ -f public/icon.png ]]; then
+    install -Dm644 public/icon.png "${pkgdir}/usr/share/icons/hicolor/512x512/apps/mux.png"
+  fi
 
   install -dm755 "${pkgdir}/usr/share/applications"
   install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/mux.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=Mux
-Comment=Desktop app for isolated, parallel agentic development
-Exec=mux
+GenericName=Agent Multiplexer
+Comment=Agent Multiplexer
+Exec=mux %U
 Icon=mux
 Terminal=false
 Categories=Development;
-StartupWMClass=Mux
+StartupWMClass=mux
 EOF
 }

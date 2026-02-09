@@ -14,9 +14,21 @@ docker build -t "${IMAGE_TAG}" "${WORKDIR}"
 
 echo "==> Running package build in container"
 if [[ -t 0 && -t 1 ]]; then
-  docker run --rm -it "${IMAGE_TAG}"
+  docker run --rm -it "${IMAGE_TAG}" bash -lc '
+    set -euo pipefail
+    makepkg --syncdeps --noconfirm --cleanbuild --clean
+    PKG_FILE="$(ls -1t mux-*.pkg.tar.* | grep -v -- -debug | head -n 1)"
+    sudo pacman -U --noconfirm "${PKG_FILE}"
+    mux --help
+  '
 else
-  docker run --rm "${IMAGE_TAG}"
+  docker run --rm "${IMAGE_TAG}" bash -lc '
+    set -euo pipefail
+    makepkg --syncdeps --noconfirm --cleanbuild --clean
+    PKG_FILE="$(ls -1t mux-*.pkg.tar.* | grep -v -- -debug | head -n 1)"
+    sudo pacman -U --noconfirm "${PKG_FILE}"
+    mux --help
+  '
 fi
 
 echo "==> Done."
