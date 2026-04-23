@@ -8,8 +8,6 @@ the [`Publish` workflow](./.github/workflows/publish.yaml).
 
 ## Updating to a new upstream release
 
-On Arch Linux (or inside the Docker image — see below):
-
 ```bash
 ./update.sh 0.17.0
 git push origin main
@@ -19,15 +17,10 @@ git push origin main
 (via `updpkgsums` from `pacman-contrib`), regenerates `.SRCINFO`, and creates
 a commit. Pushing to `main` triggers the AUR publish workflow.
 
-### From a non-Arch host
-
-Run the update inside the repo's Arch container:
-
-```bash
-docker build -t mux-aur-build .
-docker run --rm -it -v "$PWD:/work" -w /work mux-aur-build \
-  bash -lc 'sudo chown -R builder /work && ./update.sh 0.17.0'
-```
+The package-mutating steps always run inside the Arch container defined by
+[`Dockerfile`](./Dockerfile) — regardless of host OS — so the only host
+requirements are Docker or Podman and Git. The `git commit` itself runs on
+the host so your git identity, signing key, and pre-commit hooks apply.
 
 ## Verifying the build locally
 

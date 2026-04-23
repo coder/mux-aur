@@ -9,6 +9,7 @@ RUN pacman -Syu --noconfirm && \
       jq \
       nodejs \
       npm \
+      pacman-contrib \
       sudo && \
     pacman -Scc --noconfirm
 

@@ -3,61 +3,91 @@
 #
 # Usage: ./update.sh <version>
 #
-# This script:
+# What it does:
 #   1. Updates `pkgver` in PKGBUILD to the provided version.
 #   2. Resets `pkgrel` to 1.
 #   3. Refreshes `sha256sums` via `updpkgsums` (from pacman-contrib).
 #   4. Regenerates `.SRCINFO` via `makepkg --printsrcinfo`.
 #   5. Creates a git commit with the changes.
 #
+# Steps 1–4 always run inside the Arch container defined by ./Dockerfile
+# (via docker or podman), regardless of the host OS — including on Arch
+# Linux. This keeps behavior identical everywhere and avoids needing any
+# Arch tooling on the host.
+#
+# The `git commit` always runs on the host so your git identity, signing
+# key, and pre-commit hooks apply.
+#
+# Host requirements: git, and one of docker or podman.
+#
 # After running, push the branch (`git push origin main`) to trigger the
 # GitHub Actions workflow that publishes the package to AUR.
-#
-# Requires Arch Linux tooling (`makepkg`, `updpkgsums`). On non-Arch hosts,
-# run this inside the Docker image defined by the repo's Dockerfile, for
-# example:
-#
-#   docker build -t mux-aur-build .
-#   docker run --rm -it -v "$PWD:/work" -w /work mux-aur-build \
-#     bash -lc 'sudo chown -R builder /work && ./update.sh <version>'
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${ROOT_DIR}"
 
+readonly CONTAINER_IMAGE="mux-aur-build"
+
 err() {
   printf 'error: %s\n' "$*" >&2
 }
 
-require_arch_tooling() {
-  if ! command -v makepkg >/dev/null 2>&1; then
-    err "\`makepkg\` not found. Run this on Arch Linux or inside the"
-    err "        Docker image defined by ./Dockerfile (see header)."
-    exit 1
-  fi
+# -----------------------------------------------------------------------------
+# Container invocation (always used on the host).
+# -----------------------------------------------------------------------------
 
-  if ! command -v updpkgsums >/dev/null 2>&1; then
-    echo "\`updpkgsums\` not found (needed to refresh sha256sums)."
-    if command -v sudo >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then
-      echo "Installing pacman-contrib..."
-      sudo pacman -S --noconfirm --needed pacman-contrib
-    else
-      err "install the \`pacman-contrib\` package first."
-      exit 1
-    fi
+pick_container_cli() {
+  if command -v docker >/dev/null 2>&1; then
+    printf docker
+  elif command -v podman >/dev/null 2>&1; then
+    printf podman
+  else
+    return 1
   fi
 }
 
-main() {
-  local new_version="${1:-}"
-  if [[ -z "${new_version}" ]]; then
-    err "missing version argument"
-    echo "usage: $0 <version>" >&2
+run_in_container() {
+  local new_version="$1"
+  local cli
+  if ! cli="$(pick_container_cli)"; then
+    err "neither \`docker\` nor \`podman\` is available."
+    err "        Install Docker or Podman and try again."
     exit 1
   fi
 
-  require_arch_tooling
+  echo "==> building Arch container via ${cli}"
+  "${cli}" build -t "${CONTAINER_IMAGE}" "${ROOT_DIR}" >&2
+
+  local host_uid host_gid
+  host_uid="$(id -u)"
+  host_gid="$(id -g)"
+
+  echo "==> running update inside ${cli} container"
+  # Take ownership of /work so the unprivileged builder user can write
+  # to PKGBUILD/.SRCINFO, re-exec this script (which hits update_files
+  # because of the sentinel env var), and always restore host ownership
+  # on exit via the EXIT trap — even if the inner run fails.
+  "${cli}" run --rm \
+    -v "${ROOT_DIR}:/work" \
+    -w /work \
+    -e "MUX_AUR_IN_CONTAINER=1" \
+    "${CONTAINER_IMAGE}" \
+    bash -lc "
+      set -euo pipefail
+      trap 'sudo chown -R ${host_uid}:${host_gid} /work' EXIT
+      sudo chown -R builder:builder /work
+      ./update.sh '${new_version}'
+    "
+}
+
+# -----------------------------------------------------------------------------
+# File mutations (runs inside the container).
+# -----------------------------------------------------------------------------
+
+update_files() {
+  local new_version="$1"
 
   local current_version
   current_version="$(awk -F= '/^pkgver=/ { print $2; exit }' PKGBUILD)"
@@ -78,20 +108,50 @@ main() {
 
   updpkgsums
   makepkg --printsrcinfo > .SRCINFO
+}
 
+# -----------------------------------------------------------------------------
+# Host-only: git commit.
+# -----------------------------------------------------------------------------
+
+commit_changes() {
+  local new_version="$1"
   git add PKGBUILD .SRCINFO
   if git diff --cached --quiet; then
     echo "No changes detected (PKGBUILD and .SRCINFO already up to date)."
-    exit 0
+    return 0
   fi
   git commit -m "mux: update to ${new_version}"
-
   cat <<'EOF'
 
 Next step: push main to origin to trigger the AUR publish workflow:
 
   git push origin main
 EOF
+}
+
+# -----------------------------------------------------------------------------
+# Entry point.
+# -----------------------------------------------------------------------------
+
+main() {
+  local new_version="${1:-}"
+  if [[ -z "${new_version}" ]]; then
+    err "missing version argument"
+    echo "usage: $0 <version>" >&2
+    exit 1
+  fi
+
+  if [[ -n "${MUX_AUR_IN_CONTAINER:-}" ]]; then
+    # Inside the container: mutate files; let the host do the commit.
+    update_files "${new_version}"
+    return
+  fi
+
+  # On the host: always delegate file mutations to the container, then
+  # commit locally so the user's git identity/hooks apply.
+  run_in_container "${new_version}"
+  commit_changes "${new_version}"
 }
 
 main "$@"
