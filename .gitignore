@@ -5,7 +5,7 @@
 !README.md
 !update.sh
 !.github
+!.github/**
 !Dockerfile
 !flake.*
 !test-docker-build.sh
-!update-srcinfo.sh
